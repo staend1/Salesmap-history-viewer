@@ -1,18 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 
 export default function Home() {
   const [token, setToken] = useState("");
-  const [cursor, setCursor] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [autoFetch, setAutoFetch] = useState(true);
+  const [selectedPeople, setSelectedPeople] = useState(null);
+  const [showUtmOnly, setShowUtmOnly] = useState(false);
 
   const fetchPeopleHistory = async () => {
     setLoading(true);
     setError(null);
+    setSelectedPeople(null);
 
     try {
       // Use the local API route
@@ -20,9 +22,6 @@ export default function Home() {
         "/api/v2/people/history",
         window.location.origin
       );
-      if (cursor) {
-        url.searchParams.append("cursor", cursor);
-      }
 
       const response = await fetch(url.toString(), {
         method: "GET",
@@ -49,10 +48,6 @@ export default function Home() {
       }
 
       setResult(data);
-      if (data.data?.nextCursor && autoFetch) {
-        setCursor(data.data.nextCursor);
-        setTimeout(() => fetchPeopleHistory(), 100);
-      }
     } catch (err) {
       setError(err.message || "데이터를 불러오는 중 오류가 발생했습니다.");
       console.error("API 호출 오류:", err);
@@ -61,14 +56,92 @@ export default function Home() {
     }
   };
 
+  // 고유한 고객 정보를 추출하는 함수
+  const uniquePeople = useMemo(() => {
+    if (!result || !result.data || !result.data.peopleHistoryList) return [];
+
+    const peopleMap = new Map();
+    
+    result.data.peopleHistoryList.forEach(item => {
+      if (!peopleMap.has(item.peopleId)) {
+        // 이름 정보를 찾기 위해 해당 고객의 이름 필드 기록을 찾음
+        const nameRecord = result.data.peopleHistoryList.find(
+          record => record.peopleId === item.peopleId && record.fieldName === "이름"
+        );
+        
+        // UTM 관련 필드가 있는지 확인
+        const hasUtmFields = result.data.peopleHistoryList.some(
+          record => record.peopleId === item.peopleId && 
+            (record.fieldName === "utm_source" || 
+             record.fieldName === "utm_medium" || 
+             record.fieldName === "utm_campaign" || 
+             record.fieldName === "utm_content")
+        );
+        
+        peopleMap.set(item.peopleId, {
+          id: item.peopleId,
+          name: nameRecord ? nameRecord.fieldValue : "알 수 없는 이름",
+          // 가장 최근 기록 시간
+          lastActivity: new Date(
+            Math.max(...result.data.peopleHistoryList
+              .filter(record => record.peopleId === item.peopleId)
+              .map(record => new Date(record.createdAt).getTime())
+            )
+          ),
+          hasUtmFields: hasUtmFields
+        });
+      }
+    });
+    
+    return Array.from(peopleMap.values());
+  }, [result]);
+
+  // 검색 결과 필터링
+  const filteredPeople = useMemo(() => {
+    let filtered = uniquePeople;
+    
+    // 검색어로 필터링
+    if (searchTerm.trim()) {
+      filtered = filtered.filter(person => 
+        person.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        person.id.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    
+    // UTM 필터링 적용
+    if (showUtmOnly) {
+      filtered = filtered.filter(person => person.hasUtmFields);
+    }
+    
+    return filtered;
+  }, [uniquePeople, searchTerm, showUtmOnly]);
+  
+  // 선택된 고객의 히스토리
+  const selectedPersonHistory = useMemo(() => {
+    if (!selectedPeople || !result || !result.data || !result.data.peopleHistoryList) return [];
+    
+    let history = result.data.peopleHistoryList
+      .filter(item => item.peopleId === selectedPeople.id);
+      
+    // UTM 필드만 보기 옵션이 켜져 있으면 UTM 관련 필드만 필터링
+    if (showUtmOnly) {
+      history = history.filter(item => 
+        item.fieldName === "utm_source" || 
+        item.fieldName === "utm_medium" || 
+        item.fieldName === "utm_campaign" || 
+        item.fieldName === "utm_content"
+      );
+    }
+    
+    return history.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }, [selectedPeople, result, showUtmOnly]);
+
   return (
-    <main className="flex min-h-screen flex-col items-center p-8 md:p-24">
+    <main className="flex min-h-screen flex-col items-center p-4 md:p-8">
       <h1 className="text-3xl font-bold mb-8">고객 히스토리 조회</h1>
 
       <div className="w-full max-w-4xl bg-white p-6 rounded-lg shadow-md mb-8">
-        <h2 className="text-xl font-semibold mb-4">
-          고객 히스토리 조회
-        </h2>
+        <h2 className="text-xl font-semibold mb-4">인증</h2>
 
         <div className="mb-4">
           <label
@@ -87,45 +160,12 @@ export default function Home() {
           />
         </div>
 
-        <div className="mb-4">
-          <label
-            htmlFor="cursor"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            커서 (선택 사항)
-          </label>
-          <input
-            id="cursor"
-            type="text"
-            value={cursor}
-            onChange={(e) => setCursor(e.target.value)}
-            placeholder="페이지네이션 커서"
-            className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-
-        <div className="mb-4 flex items-center">
-          <input
-            id="autoFetch"
-            type="checkbox"
-            checked={autoFetch}
-            onChange={(e) => setAutoFetch(e.target.checked)}
-            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-          />
-          <label
-            htmlFor="autoFetch"
-            className="ml-2 block text-sm text-gray-700"
-          >
-            자동으로 모든 페이지 가져오기
-          </label>
-        </div>
-
         <button
           onClick={fetchPeopleHistory}
           disabled={!token || loading}
           className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
-          {loading ? "로딩 중..." : "히스토리 조회"}
+          {loading ? "로딩 중..." : "고객 정보 가져오기"}
         </button>
       </div>
 
@@ -137,62 +177,98 @@ export default function Home() {
       )}
 
       {result && (
-        <div className="w-full max-w-4xl">
-          <h3 className="text-xl font-semibold mb-2">응답 결과</h3>
-
-          <div className="mb-2">
-            <h4 className="font-medium text-lg mb-2">고객 히스토리 목록</h4>
-            <div className="overflow-x-auto">
-              <table className="min-w-full bg-white border border-gray-300 rounded-md">
-                <thead>
-                  <tr className="bg-gray-100">
-                    <th className="border-b px-4 py-2 text-left">ID</th>
-                    <th className="border-b px-4 py-2 text-left">고객 ID</th>
-                    <th className="border-b px-4 py-2 text-left">타입</th>
-                    <th className="border-b px-4 py-2 text-left">필드명</th>
-                    <th className="border-b px-4 py-2 text-left">필드값</th>
-                    <th className="border-b px-4 py-2 text-left">소유자 ID</th>
-                    <th className="border-b px-4 py-2 text-left">생성일시</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.data.peopleHistoryList.map((item) => (
-                    <tr key={item.id} className="hover:bg-gray-50">
-                      <td className="border-b px-4 py-2">{item.id}</td>
-                      <td className="border-b px-4 py-2">
-                        {item.peopleId}
-                      </td>
-                      <td className="border-b px-4 py-2">{item.type}</td>
-                      <td className="border-b px-4 py-2">{item.fieldName}</td>
-                      <td className="border-b px-4 py-2">
-                        {typeof item.fieldValue === "object"
-                          ? JSON.stringify(item.fieldValue)
-                          : String(item.fieldValue)}
-                      </td>
-                      <td className="border-b px-4 py-2">{item.ownerId}</td>
-                      <td className="border-b px-4 py-2">
-                        {new Date(item.createdAt).toLocaleString()}
-                      </td>
-                    </tr>
+        <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* 고객 목록 패널 */}
+          <div className="bg-white p-4 rounded-lg shadow-md md:col-span-1">
+            <h3 className="text-lg font-semibold mb-3">고객 목록</h3>
+            
+            <div className="mb-4">
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="고객 이름 검색..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            
+            <div className="mb-4 flex items-center">
+              <label className="flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showUtmOnly}
+                  onChange={() => setShowUtmOnly(!showUtmOnly)}
+                  className="form-checkbox h-5 w-5 text-blue-600 rounded focus:ring-blue-500"
+                />
+                <span className="ml-2 text-sm text-gray-700">UTM 히스토리만 보기</span>
+              </label>
+            </div>
+            
+            <div className="overflow-y-auto max-h-[60vh]">
+              {filteredPeople.length === 0 ? (
+                <p className="text-gray-500 text-center py-4">검색 결과가 없습니다</p>
+              ) : (
+                <ul className="divide-y divide-gray-200">
+                  {filteredPeople.map(person => (
+                    <li 
+                      key={person.id} 
+                      className={`py-3 px-2 cursor-pointer hover:bg-gray-50 transition-colors duration-150 ${selectedPeople?.id === person.id ? 'bg-blue-50 border-l-4 border-blue-500' : ''}`}
+                      onClick={() => setSelectedPeople(person)}
+                    >
+                      <div className="font-medium">{person.name}</div>
+                      <div className="text-sm text-gray-500 truncate">{person.id}</div>
+                      <div className="text-xs text-gray-400">
+                        최근 활동: {person.lastActivity.toLocaleString()}
+                      </div>
+                    </li>
                   ))}
-                </tbody>
-              </table>
+                </ul>
+              )}
             </div>
           </div>
-
-          {result.data.nextCursor && (
-            <div className="mb-4">
-              <p className="text-sm text-gray-600">
-                다음 페이지 커서: {result.data.nextCursor}
-              </p>
-            </div>
-          )}
-
-          <div className="mb-4">
-            <h4 className="font-medium text-lg mb-2">원본 JSON</h4>
-            <pre className="bg-gray-800 text-white p-4 rounded-md overflow-x-auto max-h-96">
-              {JSON.stringify(result, null, 2)}
-            </pre>
+          
+          {/* 히스토리 패널 */}
+          <div className="bg-white p-4 rounded-lg shadow-md md:col-span-2">
+            {selectedPeople ? (
+              <>
+                <h3 className="text-lg font-semibold mb-1">{selectedPeople.name} 고객 히스토리</h3>
+                <p className="text-sm text-gray-500 mb-4">ID: {selectedPeople.id}</p>
+                
+                <div className="overflow-x-auto">
+                  <table className="min-w-full bg-white border border-gray-200 rounded-md">
+                    <thead>
+                      <tr className="bg-gray-50">
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">필드명</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">필드값</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">변경일시</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {selectedPersonHistory.map((item) => (
+                        <tr key={item.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm">{item.fieldName}</td>
+                          <td className="px-4 py-3 text-sm break-all">
+                            {typeof item.fieldValue === "object"
+                              ? JSON.stringify(item.fieldValue)
+                              : String(item.fieldValue)}
+                          </td>
+                          <td className="px-4 py-3 text-sm whitespace-nowrap">
+                            {new Date(item.createdAt).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-[60vh] text-gray-500">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-center">좌측에서 고객을 선택하면 히스토리가 표시됩니다</p>
+              </div>
+            )}
           </div>
         </div>
       )}
