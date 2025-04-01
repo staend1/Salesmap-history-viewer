@@ -52,6 +52,7 @@ export async function GET(request) {
   const MAX_REQUESTS_PER_WINDOW = 100;
   const RATE_LIMIT_WINDOW = 12000; // 12초(밀리초 단위)
   let windowStartTime = Date.now();
+  let rateLimited = false;
 
   while (hasMorePages) {
     // 현재 시간 창에서 요청 수 확인 및 필요시 대기
@@ -79,6 +80,14 @@ export async function GET(request) {
     requestCount++;
     const pageData = await fetchPageData(token, nextCursor);
 
+    // 429 에러 확인 (Rate Limit)
+    if (pageData && pageData.rateLimited) {
+      console.log("Rate limit에 도달했습니다. 이미 가져온 데이터만 반환합니다.");
+      rateLimited = true;
+      hasMorePages = false;
+      break;
+    }
+
     if (pageData && pageData.peopleHistoryList) {
       // 현재 페이지의 데이터를 전체 데이터 배열에 추가
       allHistoryData = [...allHistoryData, ...pageData.peopleHistoryList];
@@ -100,6 +109,8 @@ export async function GET(request) {
     data: {
       peopleHistoryList: allHistoryData,
       nextCursor: null,
+      rateLimited: rateLimited, // Rate limit 도달 여부 전달
+      totalCount: allHistoryData.length, // 총 데이터 수
     },
   };
 
@@ -132,6 +143,13 @@ async function fetchPageData(token, cursor) {
     // 응답 확인
     if (!response.ok) {
       console.error("API 응답 오류:", response.status);
+      
+      // 429 에러(Rate Limit)의 경우 로그만 남기고 빈 결과 대신 지금까지 수집한 데이터 유지
+      if (response.status === 429) {
+        console.error("Rate limit 초과: 지금까지 수집된 데이터만 반환합니다.");
+        return { peopleHistoryList: [], nextCursor: null, rateLimited: true };
+      }
+      
       return { peopleHistoryList: [], nextCursor: null };
     }
 
