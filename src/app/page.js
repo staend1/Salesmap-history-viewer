@@ -69,14 +69,37 @@ export default function Home() {
           record => record.peopleId === item.peopleId && record.fieldName === "이름"
         );
         
-        // UTM 관련 필드가 있는지 확인
-        const hasUtmFields = result.data.peopleHistoryList.some(
+        // UTM 관련 필드 수집
+        const utmRecords = result.data.peopleHistoryList.filter(
           record => record.peopleId === item.peopleId && 
             (record.fieldName === "utm_source" || 
              record.fieldName === "utm_medium" || 
              record.fieldName === "utm_campaign" || 
              record.fieldName === "utm_content")
         );
+        
+        // 최신 UTM 정보 정리
+        const utmInfo = {
+          utmSource: "",
+          utmMedium: "",
+          utmCampaign: "",
+          utmContent: ""
+        };
+        
+        // UTM 관련 필드 중 가장 최근 기록 추출
+        utmRecords.forEach(record => {
+          const fieldMap = {
+            utm_source: "utmSource",
+            utm_medium: "utmMedium",
+            utm_campaign: "utmCampaign",
+            utm_content: "utmContent"
+          };
+          
+          const fieldKey = fieldMap[record.fieldName];
+          if (fieldKey) {
+            utmInfo[fieldKey] = record.fieldValue;
+          }
+        });
         
         peopleMap.set(item.peopleId, {
           id: item.peopleId,
@@ -88,7 +111,9 @@ export default function Home() {
               .map(record => new Date(record.createdAt).getTime())
             )
           ),
-          hasUtmFields: hasUtmFields
+          hasUtmFields: utmRecords.length > 0,
+          utmInfo: utmInfo,
+          utmCount: utmRecords.length
         });
       }
     });
@@ -135,6 +160,49 @@ export default function Home() {
     
     return history.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }, [selectedPeople, result, showUtmOnly]);
+  
+  // UTM 타입별 정보 추출
+  const utmSummary = useMemo(() => {
+    if (!selectedPeople || !selectedPersonHistory.length) return null;
+    
+    // UTM 관련 필드만 필터링
+    const utmRecords = selectedPersonHistory.filter(item => 
+      item.fieldName === "utm_source" || 
+      item.fieldName === "utm_medium" || 
+      item.fieldName === "utm_campaign" || 
+      item.fieldName === "utm_content"
+    );
+    
+    if (utmRecords.length === 0) return null;
+    
+    // UTM 종류별로 중복 제거한 값 모으기
+    const summary = {
+      sources: new Set(),
+      mediums: new Set(),
+      campaigns: new Set(),
+      contents: new Set()
+    };
+    
+    utmRecords.forEach(record => {
+      if (record.fieldName === "utm_source" && record.fieldValue) {
+        summary.sources.add(record.fieldValue);
+      } else if (record.fieldName === "utm_medium" && record.fieldValue) {
+        summary.mediums.add(record.fieldValue);
+      } else if (record.fieldName === "utm_campaign" && record.fieldValue) {
+        summary.campaigns.add(record.fieldValue);
+      } else if (record.fieldName === "utm_content" && record.fieldValue) {
+        summary.contents.add(record.fieldValue);
+      }
+    });
+    
+    return {
+      sources: Array.from(summary.sources),
+      mediums: Array.from(summary.mediums),
+      campaigns: Array.from(summary.campaigns),
+      contents: Array.from(summary.contents),
+      totalCount: utmRecords.length
+    };
+  }, [selectedPeople, selectedPersonHistory]);
 
   return (
     <main className="flex min-h-screen flex-col items-center p-4 md:p-8">
@@ -220,6 +288,31 @@ export default function Home() {
                       <div className="text-xs text-gray-400">
                         최근 활동: {person.lastActivity.toLocaleString()}
                       </div>
+                      {person.hasUtmFields && (
+                        <div className="mt-2 border-t border-gray-100 pt-2">
+                          <div className="text-xs font-medium text-blue-600">UTM 정보</div>
+                          {person.utmInfo.utmSource && (
+                            <div className="text-xs text-gray-700">
+                              <span className="font-medium">Source:</span> {person.utmInfo.utmSource}
+                            </div>
+                          )}
+                          {person.utmInfo.utmMedium && (
+                            <div className="text-xs text-gray-700">
+                              <span className="font-medium">Medium:</span> {person.utmInfo.utmMedium}
+                            </div>
+                          )}
+                          {person.utmInfo.utmCampaign && (
+                            <div className="text-xs text-gray-700">
+                              <span className="font-medium">Campaign:</span> {person.utmInfo.utmCampaign}
+                            </div>
+                          )}
+                          {person.utmCount > 0 && (
+                            <div className="text-xs text-blue-500 mt-1">
+                              총 {person.utmCount}개의 UTM 기록
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -234,6 +327,70 @@ export default function Home() {
                 <h3 className="text-lg font-semibold mb-1">{selectedPeople.name} 고객 히스토리</h3>
                 <p className="text-sm text-gray-500 mb-4">ID: {selectedPeople.id}</p>
                 
+                {/* UTM 요약 정보 표시 */}
+                {utmSummary && (
+                  <div className="bg-blue-50 p-4 rounded-md mb-4 border border-blue-100">
+                    <h4 className="text-md font-semibold text-blue-700 mb-2">UTM 마케팅 경로 요약 정보</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {utmSummary.sources.length > 0 && (
+                        <div>
+                          <h5 className="text-sm font-medium text-blue-800">Source ({utmSummary.sources.length})</h5>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {utmSummary.sources.map((source, index) => (
+                              <span key={index} className="inline-block px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">
+                                {source}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {utmSummary.mediums.length > 0 && (
+                        <div>
+                          <h5 className="text-sm font-medium text-blue-800">Medium ({utmSummary.mediums.length})</h5>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {utmSummary.mediums.map((medium, index) => (
+                              <span key={index} className="inline-block px-2 py-1 text-xs bg-green-100 text-green-800 rounded">
+                                {medium}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {utmSummary.campaigns.length > 0 && (
+                        <div>
+                          <h5 className="text-sm font-medium text-blue-800">Campaign ({utmSummary.campaigns.length})</h5>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {utmSummary.campaigns.map((campaign, index) => (
+                              <span key={index} className="inline-block px-2 py-1 text-xs bg-purple-100 text-purple-800 rounded">
+                                {campaign}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {utmSummary.contents.length > 0 && (
+                        <div>
+                          <h5 className="text-sm font-medium text-blue-800">Content ({utmSummary.contents.length})</h5>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {utmSummary.contents.map((content, index) => (
+                              <span key={index} className="inline-block px-2 py-1 text-xs bg-orange-100 text-orange-800 rounded truncate max-w-full">
+                                {content}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="mt-3 text-sm text-blue-700">
+                      총 <span className="font-bold">{utmSummary.totalCount}</span>개의 UTM 관련 기록이 있습니다.
+                    </div>
+                  </div>
+                )}
+                
                 <div className="overflow-x-auto">
                   <table className="min-w-full bg-white border border-gray-200 rounded-md">
                     <thead>
@@ -245,8 +402,16 @@ export default function Home() {
                     </thead>
                     <tbody className="divide-y divide-gray-200">
                       {selectedPersonHistory.map((item) => (
-                        <tr key={item.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 text-sm">{item.fieldName}</td>
+                        <tr key={item.id} className={`hover:bg-gray-50 ${
+                          item.fieldName.startsWith('utm_') ? 'bg-blue-50' : ''
+                        }`}>
+                          <td className="px-4 py-3 text-sm">
+                            {item.fieldName.startsWith('utm_') ? (
+                              <span className="font-medium text-blue-700">{item.fieldName}</span>
+                            ) : (
+                              item.fieldName
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-sm break-all">
                             {typeof item.fieldValue === "object"
                               ? JSON.stringify(item.fieldValue)
