@@ -47,8 +47,36 @@ export async function GET(request) {
   let hasMorePages = true;
 
   // 모든 페이지 데이터 가져오기
+  // API 요청 제한(12초당 100회)에 맞추기 위한 변수
+  let requestCount = 0;
+  const MAX_REQUESTS_PER_WINDOW = 100;
+  const RATE_LIMIT_WINDOW = 12000; // 12초(밀리초 단위)
+  let windowStartTime = Date.now();
+
   while (hasMorePages) {
+    // 현재 시간 창에서 요청 수 확인 및 필요시 대기
+    const currentTime = Date.now();
+    const timeElapsed = currentTime - windowStartTime;
+    
+    // 12초가 지났으면 요청 카운터와 시간 창 리셋
+    if (timeElapsed >= RATE_LIMIT_WINDOW) {
+      requestCount = 0;
+      windowStartTime = currentTime;
+    }
+    
+    // 현재 시간 창에서 최대 요청 수에 도달했다면 대기
+    if (requestCount >= MAX_REQUESTS_PER_WINDOW) {
+      const waitTime = RATE_LIMIT_WINDOW - timeElapsed;
+      if (waitTime > 0) {
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+      // 새 시간 창 시작
+      requestCount = 0;
+      windowStartTime = Date.now();
+    }
+    
     // 현재 cursor에 해당하는 데이터 가져오기
+    requestCount++;
     const pageData = await fetchPageData(token, nextCursor);
 
     if (pageData && pageData.peopleHistoryList) {

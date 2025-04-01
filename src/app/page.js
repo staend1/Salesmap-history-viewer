@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import * as XLSX from "xlsx";
 
 // 날짜 형식화 함수
 const formatDate = (date) => {
@@ -25,6 +26,7 @@ export default function Home() {
   const [error, setError] = useState(null);
   const [selectedPeople, setSelectedPeople] = useState(null);
   const [showUtmOnly, setShowUtmOnly] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
 
   const fetchPeopleHistory = async () => {
     setLoading(true);
@@ -68,6 +70,284 @@ export default function Home() {
       console.error("API 호출 오류:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // 엑셀 다운로드 함수
+  const exportToExcel = async () => {
+    setExportLoading(true);
+    setError(null);
+
+    try {
+      // UTM 히스토리만 포함된 고객 추출 데이터를 담을 배열
+      const excelData = [];
+      
+      // API 호출을 위한 URL 및 헤더 설정
+      const url = new URL(
+        "/api/v2/people/history",
+        window.location.origin
+      );
+
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("API 호출 중 오류가 발생했습니다.");
+      }
+
+      const data = await response.json();
+      
+      if (!data.success || !data.data || !data.data.peopleHistoryList) {
+        throw new Error("유효한 데이터를 받지 못했습니다.");
+      }
+
+      // 고객 ID별로 데이터 그룹화
+      const peopleMap = new Map();
+      
+      data.data.peopleHistoryList.forEach(item => {
+        if (!peopleMap.has(item.peopleId)) {
+          peopleMap.set(item.peopleId, []);
+        }
+        peopleMap.get(item.peopleId).push(item);
+      });
+
+      // 각 고객별로 데이터 처리
+      for (const [peopleId, history] of peopleMap.entries()) {
+        // UTM 관련 기록만 필터링
+        const utmRecords = history.filter(item => 
+          item.fieldName === "utm_source" || 
+          item.fieldName === "utm_medium" || 
+          item.fieldName === "utm_campaign" || 
+          item.fieldName === "utm_content"
+        );
+        
+        // UTM 히스토리가 있는 고객만 포함
+        if (utmRecords.length === 0) continue;
+        
+        // 고객 정보 및 딜 생성 날짜 준비
+        const nameRecord = history.find(record => record.fieldName === "이름");
+        
+        // Deal 생성 날짜 확인 (딜 개수 필드가 0->1 이상으로 변경된 시점)
+        const dealCountRecords = history.filter(item => item.fieldName === "딜 개수");
+        let dealCreationDate = "";
+        
+        // 딜 개수가 0보다 큰 최초 기록 찾기
+        for (let i = dealCountRecords.length - 1; i >= 0; i--) {
+          const record = dealCountRecords[i];
+          if (parseInt(record.fieldValue) > 0) {
+            dealCreationDate = record.createdAt;
+            break;
+          }
+        }
+        
+        // UTM 파라미터 변경 히스토리 구성 (날짜, 값 날짜, 값 형식)
+        let utmHistoryText = "";
+        
+        // UTM 필드 그룹화를 위한 시간별 맵
+        const groupedByTime = new Map();
+        
+        // utm_source 기준으로 시간 그룹 생성
+        utmRecords
+          .filter(item => item.fieldName === "utm_source")
+          .forEach(sourceItem => {
+            const timeKey = sourceItem.createdAt;
+            groupedByTime.set(timeKey, {
+              createdAt: sourceItem.createdAt,
+              source: sourceItem.fieldValue,
+              medium: "",
+              campaign: "",
+              content: ""
+            });
+          });
+          
+        // 나머지 UTM 필드 매핑 (근접한 시간대의 source 기준으로)
+        utmRecords
+          .filter(item => 
+            item.fieldName === "utm_medium" || 
+            item.fieldName === "utm_campaign" || 
+            item.fieldName === "utm_content"
+          )
+          .forEach(item => {
+            // source의 시간을 기준으로 가장 가까운 그룹 찾기
+            const sourceTimes = Array.from(groupedByTime.keys());
+            
+            if (sourceTimes.length > 0) {
+              // 동일한 분 단위 내에서 같은 그룹으로 처리
+              const sameMinuteGroup = sourceTimes.find(sourceTime => {
+                const sourceDate = new Date(sourceTime);
+                const itemDate = new Date(item.createdAt);
+                return sourceDate.getFullYear() === itemDate.getFullYear() &&
+                       sourceDate.getMonth() === itemDate.getMonth() &&
+                       sourceDate.getDate() === itemDate.getDate() &&
+                       sourceDate.getHours() === itemDate.getHours() &&
+                       sourceDate.getMinutes() === itemDate.getMinutes();
+              });
+              
+              if (sameMinuteGroup) {
+                const group = groupedByTime.get(sameMinuteGroup);
+                if (item.fieldName === "utm_medium") group.medium = item.fieldValue;
+                if (item.fieldName === "utm_campaign") group.campaign = item.fieldValue;
+                if (item.fieldName === "utm_content") group.content = item.fieldValue;
+              }
+            }
+          });
+        
+        // 시간 내림차순으로 정렬
+        const sortedGroups = Array.from(groupedByTime.values())
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+          
+        // 히스토리 텍스트 구성
+        sortedGroups.forEach(group => {
+          const date = formatDate(new Date(group.createdAt));
+          utmHistoryText += `${date}\n`;
+          utmHistoryText += `source: ${group.source} medium: ${group.medium} campaign: ${group.campaign} content: ${group.content}\n\n`;
+        });
+        
+        // 전환 소요일 계산
+        let conversionDays = "";
+        if (dealCreationDate) {
+          const dealCreateTime = new Date(dealCreationDate);
+          
+          // 최초 UTM 정보 수집
+          const firstUtmSource = utmRecords
+            .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+            .at(0);
+            
+          if (firstUtmSource) {
+            const firstUtmDate = new Date(firstUtmSource.createdAt);
+            conversionDays = Math.floor((dealCreateTime - firstUtmDate) / (1000 * 60 * 60 * 24)) + "일";
+          }
+        }
+        
+        // 최초 UTM 정보
+        let firstUtm = "";
+        const firstUtmSource = utmRecords
+          .filter(item => item.fieldName === "utm_source")
+          .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+          .at(0);
+          
+        if (firstUtmSource) {
+          const firstDate = new Date(firstUtmSource.createdAt);
+          let utmInfo = {
+            source: firstUtmSource.fieldValue,
+            medium: "",
+            campaign: "",
+            content: ""
+          };
+          
+          // 같은 시간대의 다른 UTM 정보 찾기
+          utmRecords
+            .filter(item => 
+              (item.fieldName === "utm_medium" || 
+               item.fieldName === "utm_campaign" || 
+               item.fieldName === "utm_content") &&
+              // 동일한 분 단위 확인
+              Math.abs(new Date(item.createdAt) - firstDate) < 60000
+            )
+            .forEach(item => {
+              if (item.fieldName === "utm_medium") utmInfo.medium = item.fieldValue;
+              if (item.fieldName === "utm_campaign") utmInfo.campaign = item.fieldValue;
+              if (item.fieldName === "utm_content") utmInfo.content = item.fieldValue;
+            });
+            
+          firstUtm = `source: ${utmInfo.source} medium: ${utmInfo.medium} campaign: ${utmInfo.campaign} content: ${utmInfo.content}`;
+        }
+        
+        // Deal 생성 이전 단계 UTM 정보
+        let preDealUtm = "";
+        if (dealCreationDate) {
+          const dealCreateTime = new Date(dealCreationDate);
+          
+          // 각 필드별로 Deal 생성 시간 이전의 가장 최근 기록 찾기
+          const utmInfo = {
+            source: "",
+            medium: "",
+            campaign: "",
+            content: ""
+          };
+          
+          for (const field of ["utm_source", "utm_medium", "utm_campaign", "utm_content"]) {
+            const record = utmRecords
+              .filter(r => r.fieldName === field)
+              .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+              .find(r => new Date(r.createdAt) < dealCreateTime);
+              
+            if (record) {
+              const fieldMap = {
+                utm_source: "source",
+                utm_medium: "medium",
+                utm_campaign: "campaign",
+                utm_content: "content"
+              };
+              
+              utmInfo[fieldMap[field]] = record.fieldValue;
+            }
+          }
+          
+          if (utmInfo.source || utmInfo.medium || utmInfo.campaign || utmInfo.content) {
+            preDealUtm = `source: ${utmInfo.source} medium: ${utmInfo.medium} campaign: ${utmInfo.campaign} content: ${utmInfo.content}`;
+          }
+        }
+        
+        // 고객 이름과 이메일 정보 찾기
+        const customerNameRecord = history.find(record => record.fieldName === "이름");
+        const emailRecords = history.filter(record => record.fieldName === "이메일")
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        
+        const customerName = customerNameRecord ? customerNameRecord.fieldValue : "";
+        const customerEmail = emailRecords.length > 0 ? emailRecords[0].fieldValue : "";
+        
+        // 엑셀 데이터 추가
+        excelData.push({
+          'PeopleId': peopleId,
+          '고객 이름': customerName,
+          '고객 이메일': customerEmail,
+          '딜 생성날짜': dealCreationDate ? formatDate(new Date(dealCreationDate)) : '',
+          'UTM 파라미터 변경 히스토리': utmHistoryText,
+          '전환 소요일': conversionDays,
+          '최초 UTM 정보': firstUtm,
+          'Deal 생성 이전 단계 UTM 정보': preDealUtm
+        });
+      }
+      
+      // 엑셀 데이터가 비어있는 경우
+      if (excelData.length === 0) {
+        throw new Error("UTM 히스토리가 존재하는 고객이 없습니다.");
+      }
+      
+      // 엑셀 파일 생성
+      const worksheet = XLSX.utils.json_to_sheet(excelData);
+      
+      // 열 너비 조정
+      const colWidths = [
+        { wch: 40 },  // PeopleId
+        { wch: 20 },  // 고객 이름
+        { wch: 25 },  // 고객 이메일
+        { wch: 25 },  // 딜 생성날짜
+        { wch: 60 },  // UTM 파라미터 변경 히스토리
+        { wch: 15 },  // 전환 소요일
+        { wch: 40 },  // 최초 UTM 정보
+        { wch: 40 }   // Deal 생성 이전 단계 UTM 정보
+      ];
+      
+      worksheet['!cols'] = colWidths;
+      
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "UTM 히스토리");
+      
+      // 다운로드
+      XLSX.writeFile(workbook, "utm_history_export.xlsx");
+      
+    } catch (err) {
+      setError(err.message || "엑셀 다운로드 중 오류가 발생했습니다.");
+      console.error("엑셀 다운로드 오류:", err);
+    } finally {
+      setExportLoading(false);
     }
   };
 
@@ -309,13 +589,22 @@ export default function Home() {
           />
         </div>
 
-        <button
-          onClick={fetchPeopleHistory}
-          disabled={!token || loading}
-          className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
-        >
-          {loading ? "로딩 중..." : "고객 정보 가져오기"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={fetchPeopleHistory}
+            disabled={!token || loading || exportLoading}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            {loading ? "로딩 중..." : "웹에서 조회"}
+          </button>
+          <button
+            onClick={exportToExcel}
+            disabled={!token || loading || exportLoading}
+            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            {exportLoading ? "다운로드 중..." : "엑셀로 다운로드"}
+          </button>
+        </div>
       </div>
 
       {error && (
