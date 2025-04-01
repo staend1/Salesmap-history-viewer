@@ -2,6 +2,21 @@
 
 import { useState, useEffect, useMemo } from "react";
 
+// 날짜 형식화 함수
+const formatDate = (date) => {
+  const days = ['일', '월', '화', '수', '목', '금', '토'];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const dayOfWeek = days[date.getDay()];
+  const hours = date.getHours();
+  const ampm = hours >= 12 ? '오후' : '오전';
+  const formattedHours = String(hours % 12 || 12).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  
+  return `${year}-${month}-${day}(${dayOfWeek}) ${ampm} ${formattedHours}시 ${minutes}분`;
+};
+
 export default function Home() {
   const [token, setToken] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
@@ -148,13 +163,30 @@ export default function Home() {
     let history = result.data.peopleHistoryList
       .filter(item => item.peopleId === selectedPeople.id);
       
-    // UTM 필드만 보기 옵션이 켜져 있으면 UTM 관련 필드만 필터링
+    // UTM 필드만 보기 옵션이 켜져 있으면 UTM 관련 필드만 필터링 (Deal 생성날짜 필드는 예외)
     if (showUtmOnly) {
-      history = history.filter(item => 
+      // 선택된 고객이 UTM 기록이 없는 경우 선택 해제
+      const hasUtmRecords = history.some(item => 
         item.fieldName === "utm_source" || 
         item.fieldName === "utm_medium" || 
         item.fieldName === "utm_campaign" || 
         item.fieldName === "utm_content"
+      );
+      
+      if (!hasUtmRecords) {
+        // 비동기적으로 상태 업데이트 - 고객 선택만 해제
+        setTimeout(() => {
+          setSelectedPeople(null);
+        }, 0);
+        return [];
+      }
+      
+      history = history.filter(item => 
+        item.fieldName === "utm_source" || 
+        item.fieldName === "utm_medium" || 
+        item.fieldName === "utm_campaign" || 
+        item.fieldName === "utm_content" ||
+        item.fieldName === "딜 개수"
       );
     }
     
@@ -181,7 +213,13 @@ export default function Home() {
       mediums: new Set(),
       campaigns: new Set(),
       contents: new Set(),
-      dealCreationDate: null
+      dealCreationDate: null,
+      firstUtm: {
+        source: "",
+        medium: "",
+        campaign: "",
+        content: ""
+      }
     };
     
     // Deal 생성 날짜 확인 (딜 개수 필드가 0->1 이상으로 변경된 시점)
@@ -196,6 +234,32 @@ export default function Home() {
         summary.dealCreationDate = record.createdAt;
         break;
       }
+    }
+    
+    // 최초 UTM 정보 수집
+    const firstUtmSource = selectedPersonHistory
+      .filter(item => item.fieldName === "utm_source")
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+      .at(0);
+    
+    if (firstUtmSource) {
+      summary.firstUtm.source = firstUtmSource.fieldValue;
+      
+      // 같은 시간대의 다른 UTM 정보 찾기
+      const firstDate = new Date(firstUtmSource.createdAt);
+      selectedPersonHistory
+        .filter(item => 
+          (item.fieldName === "utm_medium" || 
+           item.fieldName === "utm_campaign" || 
+           item.fieldName === "utm_content") &&
+          // 동일한 분 단위 확인
+          Math.abs(new Date(item.createdAt) - firstDate) < 60000
+        )
+        .forEach(item => {
+          if (item.fieldName === "utm_medium") summary.firstUtm.medium = item.fieldValue;
+          if (item.fieldName === "utm_campaign") summary.firstUtm.campaign = item.fieldValue;
+          if (item.fieldName === "utm_content") summary.firstUtm.content = item.fieldValue;
+        });
     }
     
     utmRecords.forEach(record => {
@@ -216,7 +280,8 @@ export default function Home() {
       campaigns: Array.from(summary.campaigns),
       contents: Array.from(summary.contents),
       dealCreationDate: summary.dealCreationDate,
-      totalCount: utmRecords.length
+      totalCount: utmRecords.length,
+      firstUtm: summary.firstUtm
     };
   }, [selectedPeople, selectedPersonHistory]);
 
@@ -304,31 +369,6 @@ export default function Home() {
                       <div className="text-xs text-gray-400">
                         최근 활동: {person.lastActivity.toLocaleString()}
                       </div>
-                      {person.hasUtmFields && (
-                        <div className="mt-2 border-t border-gray-100 pt-2">
-                          <div className="text-xs font-medium text-blue-600">UTM 정보</div>
-                          {person.utmInfo.utmSource && (
-                            <div className="text-xs text-gray-700">
-                              <span className="font-medium">Source:</span> {person.utmInfo.utmSource}
-                            </div>
-                          )}
-                          {person.utmInfo.utmMedium && (
-                            <div className="text-xs text-gray-700">
-                              <span className="font-medium">Medium:</span> {person.utmInfo.utmMedium}
-                            </div>
-                          )}
-                          {person.utmInfo.utmCampaign && (
-                            <div className="text-xs text-gray-700">
-                              <span className="font-medium">Campaign:</span> {person.utmInfo.utmCampaign}
-                            </div>
-                          )}
-                          {person.utmCount > 0 && (
-                            <div className="text-xs text-blue-500 mt-1">
-                              총 {person.utmCount}개의 UTM 기록
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </li>
                   ))}
                 </ul>
@@ -347,68 +387,197 @@ export default function Home() {
                 {utmSummary && (
                   <div className="bg-blue-50 p-4 rounded-md mb-4 border border-blue-100">
                     <h4 className="text-md font-semibold text-blue-700 mb-2">UTM 마케팅 경로 요약 정보</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {utmSummary.sources.length > 0 && (
-                        <div>
-                          <h5 className="text-sm font-medium text-blue-800">Source ({utmSummary.sources.length})</h5>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {utmSummary.sources.map((source, index) => (
-                              <span key={index} className="inline-block px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">
-                                {source}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      
-                      {utmSummary.mediums.length > 0 && (
-                        <div>
-                          <h5 className="text-sm font-medium text-blue-800">Medium ({utmSummary.mediums.length})</h5>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {utmSummary.mediums.map((medium, index) => (
-                              <span key={index} className="inline-block px-2 py-1 text-xs bg-green-100 text-green-800 rounded">
-                                {medium}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      
-                      {utmSummary.campaigns.length > 0 && (
-                        <div>
-                          <h5 className="text-sm font-medium text-blue-800">Campaign ({utmSummary.campaigns.length})</h5>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {utmSummary.campaigns.map((campaign, index) => (
-                              <span key={index} className="inline-block px-2 py-1 text-xs bg-purple-100 text-purple-800 rounded">
-                                {campaign}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      
-                      {utmSummary.contents.length > 0 && (
-                        <div>
-                          <h5 className="text-sm font-medium text-blue-800">Content ({utmSummary.contents.length})</h5>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {utmSummary.contents.map((content, index) => (
-                              <span key={index} className="inline-block px-2 py-1 text-xs bg-orange-100 text-orange-800 rounded truncate max-w-full">
-                                {content}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                    
+                    {/* UTM 변경 히스토리 표시 */}
+                    <div className="mb-4 overflow-y-auto max-h-[30vh] border border-blue-100 rounded-md p-2 bg-white">
+                      <h5 className="text-sm font-medium text-blue-800 mb-2">UTM 파라미터 변경 히스토리</h5>
+                      <div className="space-y-2">
+                        {(() => {
+                          // UTM 필드 그룹화를 위한 시간별 맵
+                          const groupedByTime = new Map();
+                          
+                          // utm_source 기준으로 시간 그룹 생성
+                          selectedPersonHistory
+                            .filter(item => item.fieldName === "utm_source")
+                            .forEach(sourceItem => {
+                              const timeKey = sourceItem.createdAt;
+                              groupedByTime.set(timeKey, {
+                                createdAt: sourceItem.createdAt,
+                                source: sourceItem.fieldValue,
+                                medium: "",
+                                campaign: "",
+                                content: ""
+                              });
+                            });
+                            
+                          // 나머지 UTM 필드 매핑 (근접한 시간대의 source 기준으로)
+                          selectedPersonHistory
+                            .filter(item => 
+                              item.fieldName === "utm_medium" || 
+                              item.fieldName === "utm_campaign" || 
+                              item.fieldName === "utm_content"
+                            )
+                            .forEach(item => {
+                              // source의 시간을 기준으로 가장 가까운 그룹 찾기
+                              const sourceTimes = Array.from(groupedByTime.keys());
+                              
+                              if (sourceTimes.length > 0) {
+                                // 동일한 분 단위 내에서 같은 그룹으로 처리
+                                const sameMinuteGroup = sourceTimes.find(sourceTime => {
+                                  const sourceDate = new Date(sourceTime);
+                                  const itemDate = new Date(item.createdAt);
+                                  return sourceDate.getFullYear() === itemDate.getFullYear() &&
+                                         sourceDate.getMonth() === itemDate.getMonth() &&
+                                         sourceDate.getDate() === itemDate.getDate() &&
+                                         sourceDate.getHours() === itemDate.getHours() &&
+                                         sourceDate.getMinutes() === itemDate.getMinutes();
+                                });
+                                
+                                if (sameMinuteGroup) {
+                                  const group = groupedByTime.get(sameMinuteGroup);
+                                  if (item.fieldName === "utm_medium") group.medium = item.fieldValue;
+                                  if (item.fieldName === "utm_campaign") group.campaign = item.fieldValue;
+                                  if (item.fieldName === "utm_content") group.content = item.fieldValue;
+                                }
+                              }
+                            });
+                          
+                          // 시간 내림차순으로 정렬하여 표시
+                          return Array.from(groupedByTime.values())
+                            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                            .map((group, idx) => (
+                              <div key={idx} className="p-2 bg-blue-50 rounded-md border border-blue-100">
+                                <div className="text-xs text-gray-700 font-medium">
+                                  {formatDate(new Date(group.createdAt))}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 mt-1">
+                                  <span className="text-sm font-semibold">source:</span>
+                                  <span className="inline-block px-2 py-1 text-xs rounded bg-blue-100 text-blue-800">{group.source}</span>
+                                  <span className="text-sm font-semibold">medium:</span>
+                                  <span className="inline-block px-2 py-1 text-xs rounded bg-green-100 text-green-800">{group.medium}</span>
+                                  <span className="text-sm font-semibold">campaign:</span>
+                                  <span className="inline-block px-2 py-1 text-xs rounded bg-purple-100 text-purple-800">{group.campaign}</span>
+                                  <span className="text-sm font-semibold">content:</span>
+                                  <span className="inline-block px-2 py-1 text-xs rounded bg-orange-100 text-orange-800">{group.content}</span>
+                                </div>
+                              </div>
+                            ));
+                        })()}
+                      </div>
                     </div>
                     
+                    
                     <div className="mt-3 text-sm text-blue-700">
-                      총 <span className="font-bold">{utmSummary.totalCount}</span>개의 UTM 관련 기록이 있습니다.
+                      총 <span className="font-bold">{utmSummary.sources.length}</span>개의 소스가 있습니다.
                     </div>
                     
                     {utmSummary.dealCreationDate && (
                       <div className="mt-3 text-sm border-t border-blue-100 pt-2">
-                        <span className="font-medium text-blue-800">Deal - 생성 날짜:</span>
-                        <span className="ml-2">{new Date(utmSummary.dealCreationDate).toLocaleString()}</span>
+                        <span className="font-medium text-blue-800">Deal - 생성날짜</span><br />
+                        <span>{formatDate(new Date(utmSummary.dealCreationDate))}</span>
+                      </div>
+                    )}
+                    
+                    {utmSummary.firstUtm && utmSummary.firstUtm.source && (
+                      <div className="mt-3 text-sm border-t border-blue-100 pt-2">
+                        <span className="font-medium text-blue-800">최초 UTM 정보</span><br />
+                        {(() => {
+                          // 최초 UTM 정보 수집
+                          const firstUtmSource = selectedPersonHistory
+                            .filter(item => item.fieldName === "utm_source")
+                            .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+                            .at(0);
+                          
+                          if (!firstUtmSource) return <span>정보 없음</span>;
+                          
+                          return <span>{formatDate(new Date(firstUtmSource.createdAt))}</span>;
+                        })()}
+                        <br />
+                        <span>source: {utmSummary.firstUtm.source} medium: {utmSummary.firstUtm.medium} campaign: {utmSummary.firstUtm.campaign} content: {utmSummary.firstUtm.content}</span>
+                      </div>
+                    )}
+                    
+                    {utmSummary.dealCreationDate && (
+                      <div className="mt-3 text-sm border-t border-blue-100 pt-2">
+                        <span className="font-medium text-blue-800">Deal 생성 이전 단계 UTM 정보</span><br />
+                        {(() => {
+                          // Deal 생성 시간 확인
+                          const dealCreateTime = new Date(utmSummary.dealCreationDate);
+                          
+                          // 모든 UTM 기록 시간별로 정렬
+                          const utmRecords = selectedPersonHistory.filter(item => 
+                            item.fieldName === "utm_source" || 
+                            item.fieldName === "utm_medium" || 
+                            item.fieldName === "utm_campaign" || 
+                            item.fieldName === "utm_content"
+                          ).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                          
+                          // Deal 생성 시간 직전의 UTM 레코드 찾기
+                          const preDealUtm = {
+                            source: "",
+                            medium: "",
+                            campaign: "",
+                            content: "",
+                            date: null
+                          };
+                          
+                          // 각 필드별로 Deal 생성 시간 이전의 가장 최근 기록 찾기
+                          for (const field of ["utm_source", "utm_medium", "utm_campaign", "utm_content"]) {
+                            const record = utmRecords.find(r => 
+                              r.fieldName === field && 
+                              new Date(r.createdAt) < dealCreateTime
+                            );
+                            
+                            if (record) {
+                              const fieldMap = {
+                                utm_source: "source",
+                                utm_medium: "medium",
+                                utm_campaign: "campaign",
+                                utm_content: "content"
+                              };
+                              
+                              preDealUtm[fieldMap[field]] = record.fieldValue;
+                              
+                              // 날짜 정보 저장 (utm_source의 날짜 기준)
+                              if (field === "utm_source") {
+                                preDealUtm.date = new Date(record.createdAt);
+                              }
+                            }
+                          }
+                          
+                          if (!preDealUtm.source && !preDealUtm.medium && !preDealUtm.campaign && !preDealUtm.content) {
+                            return <span>Deal 생성 이전 UTM 정보가 없습니다.</span>;
+                          }
+                          
+                          return (
+                            <>
+                              {preDealUtm.date && <span>{formatDate(preDealUtm.date)}</span>}
+                              <br />
+                              <span>source: {preDealUtm.source} medium: {preDealUtm.medium} campaign: {preDealUtm.campaign} content: {preDealUtm.content}</span>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
+                    
+                    {utmSummary.dealCreationDate && (
+                      <div className="mt-3 text-sm border-t border-blue-100 pt-2">
+                        <span className="font-medium text-blue-800">전환 소요일</span><br />
+                        <span>{(() => {
+                          // Deal 생성 시간 확인
+                          const dealCreateTime = new Date(utmSummary.dealCreationDate);
+                          
+                          // 최초 UTM 정보 수집
+                          const firstUtmSource = selectedPersonHistory
+                            .filter(item => item.fieldName === "utm_source")
+                            .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+                            .at(0);
+                          
+                          if (!firstUtmSource) return "정보 없음";
+                          
+                          const firstUtmDate = new Date(firstUtmSource.createdAt);
+                          return Math.floor((dealCreateTime - firstUtmDate) / (1000 * 60 * 60 * 24)) + "일";
+                        })()}</span>
                       </div>
                     )}
                   </div>
@@ -426,10 +595,10 @@ export default function Home() {
                     <tbody className="divide-y divide-gray-200">
                       {selectedPersonHistory.map((item) => (
                         <tr key={item.id} className={`hover:bg-gray-50 ${
-                          item.fieldName.startsWith('utm_') ? 'bg-blue-50' : ''
+                          item.fieldName && item.fieldName.startsWith('utm_') ? 'bg-blue-50' : ''
                         }`}>
                           <td className="px-4 py-3 text-sm">
-                            {item.fieldName.startsWith('utm_') ? (
+                            {item.fieldName && item.fieldName.startsWith('utm_') ? (
                               <span className="font-medium text-blue-700">{item.fieldName}</span>
                             ) : (
                               item.fieldName
@@ -441,7 +610,7 @@ export default function Home() {
                               : String(item.fieldValue)}
                           </td>
                           <td className="px-4 py-3 text-sm whitespace-nowrap">
-                            {new Date(item.createdAt).toLocaleString()}
+                            {formatDate(new Date(item.createdAt))}
                           </td>
                         </tr>
                       ))}
