@@ -10,14 +10,14 @@ export default function Home() {
   const [error, setError] = useState(null);
   const [autoFetch, setAutoFetch] = useState(true);
 
-  const fetchOrganizationHistory = async () => {
+  const fetchPeopleHistory = async () => {
     setLoading(true);
     setError(null);
 
     try {
       // Use the local API route
       const url = new URL(
-        "/api/v2/organization/history",
+        "/api/v2/people/history",
         window.location.origin
       );
       if (cursor) {
@@ -51,7 +51,7 @@ export default function Home() {
       setResult(data);
       if (data.data?.nextCursor && autoFetch) {
         setCursor(data.data.nextCursor);
-        setTimeout(() => fetchOrganizationHistory(), 100);
+        setTimeout(() => fetchPeopleHistory(), 100);
       }
     } catch (err) {
       setError(err.message || "데이터를 불러오는 중 오류가 발생했습니다.");
@@ -63,11 +63,11 @@ export default function Home() {
 
   return (
     <main className="flex min-h-screen flex-col items-center p-8 md:p-24">
-      <h1 className="text-3xl font-bold mb-8">회사 히스토리 API 테스트</h1>
+      <h1 className="text-3xl font-bold mb-8">고객 히스토리 조회</h1>
 
       <div className="w-full max-w-4xl bg-white p-6 rounded-lg shadow-md mb-8">
         <h2 className="text-xl font-semibold mb-4">
-          GET /v2/organization/history
+          고객 히스토리 조회
         </h2>
 
         <div className="mb-4">
@@ -121,11 +121,11 @@ export default function Home() {
         </div>
 
         <button
-          onClick={fetchOrganizationHistory}
+          onClick={fetchPeopleHistory}
           disabled={!token || loading}
           className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
-          {loading ? "로딩 중..." : "API 호출"}
+          {loading ? "로딩 중..." : "히스토리 조회"}
         </button>
       </div>
 
@@ -141,13 +141,13 @@ export default function Home() {
           <h3 className="text-xl font-semibold mb-2">응답 결과</h3>
 
           <div className="mb-2">
-            <h4 className="font-medium text-lg mb-2">히스토리 목록</h4>
+            <h4 className="font-medium text-lg mb-2">고객 히스토리 목록</h4>
             <div className="overflow-x-auto">
               <table className="min-w-full bg-white border border-gray-300 rounded-md">
                 <thead>
                   <tr className="bg-gray-100">
                     <th className="border-b px-4 py-2 text-left">ID</th>
-                    <th className="border-b px-4 py-2 text-left">회사 ID</th>
+                    <th className="border-b px-4 py-2 text-left">고객 ID</th>
                     <th className="border-b px-4 py-2 text-left">타입</th>
                     <th className="border-b px-4 py-2 text-left">필드명</th>
                     <th className="border-b px-4 py-2 text-left">필드값</th>
@@ -156,11 +156,11 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {result.data.organizationHistoryList.map((item) => (
+                  {result.data.peopleHistoryList.map((item) => (
                     <tr key={item.id} className="hover:bg-gray-50">
                       <td className="border-b px-4 py-2">{item.id}</td>
                       <td className="border-b px-4 py-2">
-                        {item.organizationId}
+                        {item.peopleId}
                       </td>
                       <td className="border-b px-4 py-2">{item.type}</td>
                       <td className="border-b px-4 py-2">{item.fieldName}</td>
