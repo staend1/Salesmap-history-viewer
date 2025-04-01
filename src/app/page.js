@@ -180,8 +180,23 @@ export default function Home() {
       sources: new Set(),
       mediums: new Set(),
       campaigns: new Set(),
-      contents: new Set()
+      contents: new Set(),
+      dealCreationDate: null
     };
+    
+    // Deal 생성 날짜 확인 (딜 개수 필드가 0->1 이상으로 변경된 시점)
+    const dealCountRecords = selectedPersonHistory.filter(item => 
+      item.fieldName === "딜 개수"
+    );
+    
+    // 딜 개수가 0보다 큰 최초 기록 찾기
+    for (let i = dealCountRecords.length - 1; i >= 0; i--) {
+      const record = dealCountRecords[i];
+      if (parseInt(record.fieldValue) > 0) {
+        summary.dealCreationDate = record.createdAt;
+        break;
+      }
+    }
     
     utmRecords.forEach(record => {
       if (record.fieldName === "utm_source" && record.fieldValue) {
@@ -200,6 +215,7 @@ export default function Home() {
       mediums: Array.from(summary.mediums),
       campaigns: Array.from(summary.campaigns),
       contents: Array.from(summary.contents),
+      dealCreationDate: summary.dealCreationDate,
       totalCount: utmRecords.length
     };
   }, [selectedPeople, selectedPersonHistory]);
@@ -388,6 +404,13 @@ export default function Home() {
                     <div className="mt-3 text-sm text-blue-700">
                       총 <span className="font-bold">{utmSummary.totalCount}</span>개의 UTM 관련 기록이 있습니다.
                     </div>
+                    
+                    {utmSummary.dealCreationDate && (
+                      <div className="mt-3 text-sm border-t border-blue-100 pt-2">
+                        <span className="font-medium text-blue-800">Deal - 생성 날짜:</span>
+                        <span className="ml-2">{new Date(utmSummary.dealCreationDate).toLocaleString()}</span>
+                      </div>
+                    )}
                   </div>
                 )}
                 
